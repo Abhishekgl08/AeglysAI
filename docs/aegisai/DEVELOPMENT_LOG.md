@@ -768,3 +768,80 @@ Research tests 19 passed, .NET tests 168 passed, security tests 27 passed. Histo
 tracked/history publication gates still fail. No commit, push, PR, merge, publication,
 Portal change or legacy history modification. See the [full evidence report](../../research/acbsd/DATA002_REPORT.md)
 for commands, counts, hashes, metrics, limitations and proposed review actions.
+
+## 2026-11-02 — Tools container NuGet mutex startup fix (uncommitted)
+
+- IMPLEMENTED: tools entrypoint creates a private, user-owned XDG_RUNTIME_DIR
+  before invoking .NET. Compose numeric host UIDs may lack a passwd entry, which
+  prevents recent .NET runtimes from locating user-scoped mutex storage.
+- Reproduced NuGet-Migrations IOException with `dotnet --help` in the original
+  tools image (SDK 8.0.427); `dotnet --version` alone did not reproduce it.
+- Rebuilt tools image and passed all six scripts/tests tests, including first-run
+  help and console template creation for UIDs 1000 and 501. Runtime directory
+  ownership and mode 700 verified in both disposable containers.
+- Shell syntax and diff whitespace checks passed. No application behavior changed;
+  no full application test suite run. No commit, push, or history modification.
+
+### Follow-up audit and application verification
+
+- Inspected only /Users/shubhprabhat/Documents/Work/AeglysAI, origin
+  https://github.com/shubh-techie/AeglysAI.git, branch main. Existing local fix
+  retained; no application code, Compose privileges or runtime user changed.
+- Compose deployment/docker/compose.yaml, service tools, Dockerfile
+  deployment/docker/Dockerfile target tools, image
+  mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim resolved to digest
+  sha256:6ba9644da07bb5b560a402acec9ca38711a0762969f1b61da261df5c9f6f85da.
+  Observed Debian 12 linux-arm64 SDK 8.0.427, runtime 8.0.33, UID:GID 1000:1000.
+- Before entrypoint initialization: HOME=/, DOTNET_CLI_HOME=/tmp/dotnet,
+  XDG_RUNTIME_DIR and TMPDIR unset; no passwd entry for UID 1000. Root directory
+  root-owned 755, /tmp root-owned 1777; CLI home initially absent. Tools root
+  filesystem writable, repository bind read-only, /results and /local writable.
+  Tools has no /tmp tmpfs or explicit extra security options; API alone has
+  read-only root, /tmp tmpfs, no-new-privileges and all capabilities dropped.
+  No security settings relaxed. Original named container no longer exists.
+- Reproduction through existing tools service with --entrypoint sh: dotnet --info
+  succeeded; dotnet --help failed with the exact NuGet-Migrations exception.
+  Microsoft documents this behavior from .NET 8.0.32 for numeric UIDs without
+  passwd entries: https://learn.microsoft.com/en-us/dotnet/core/compatibility/core-libraries/11/named-mutexes-unix-default-scope
+- Rebuilt with docker compose -f deployment/docker/compose.yaml build tools.
+  Then ran the tools service with dotnet --info, dotnet --help and
+  dotnet test AeglysAI.sln --configuration Release. All succeeded: 168 tests
+  passed (Domain 14, Application 53, Architecture 4, Experiments 4, Integration
+  93), zero failures/skips. Private runtime directory was UID:GID 1000:1000, 700.
+- python3 -m unittest discover -s scripts/tests -v: six passed, including SDK
+  info/help/template initialization and private-directory checks for 1000:1000
+  and 501:20. Shell syntax and git diff --check passed.
+- Limitation: original user command was not supplied; verified the failing
+  first-run path via help and full application tests. Floating SDK tag can change
+  in future builds. Private directories live until disposable container removal.
+  No stage, commit, push, publication, or other repository modification.
+
+### AEGLYSAI-DOCKER-001 final verification and authorized local commit
+
+- Actual baseline: main at ff3dbc7bcaecde6f279925f6b25307ff52af7ec7.
+  Only the entrypoint, Docker regression test and this development log changed.
+- Added explicit creation-error reporting, EXIT cleanup of runtime/workspace
+  directories, direct-child TERM/INT forwarding and exit-status preservation.
+  The prior directory-lifetime limitation above is superseded by EXIT cleanup.
+- Final tools rebuild succeeded. dotnet --help and all 168 Release application
+  tests passed (zero failed/skipped). All six Docker regression tests passed,
+  covering SDK info/help/template startup under UIDs 1000 and 501, ownership,
+  mode 700, nonzero child exit preservation, normal/TERM cleanup, TERM receipt,
+  and injected mktemp failure preventing command execution. Shell syntax, Python
+  compilation and diff whitespace checks passed. No dedicated formatter is
+  configured for these files; the complete diff was reviewed manually.
+- Non-root Compose user and all read-only/security boundaries retained. No
+  Dockerfile, Compose, application, legacy or research assets changed.
+- Full tracked and all-locally-reachable history publication scans with pinned
+  Gitleaks 8.30.1 still fail on existing disclosures/research metadata and legacy
+  credential/signing-key paths. History includes other local branches beyond
+  main; those findings do not all belong to main ancestry. Existing legacy tag
+  remains present and history is unchanged. These are remote publication blockers,
+  not approval for any push or security exception. Raw secrets were not printed.
+- Limits: SIGKILL cannot run cleanup; forwarding targets the direct child, whose
+  own descendant handling remains its responsibility. Docker stop may eventually
+  force-kill unresponsive children. SDK tag remains floating. No claim of INT
+  delivery testing; TERM handling was exercised. No original user command supplied;
+  reproduced startup path and full tests serve as verification.
+- User authorized exactly one local commit after clean staged-content checks;
+  no push, merge, tag, publication, deployment or PR is authorized or performed.
